@@ -1,0 +1,114 @@
+version: '3.8'
+
+services:
+  # --- 1. BACKGROUND LOG & THREAT INTEL COLLECTOR ---
+  log-collector:
+    build: ./log-collector
+    container_name: enterprise_log_collector
+    depends_on:
+      - elasticsearch
+      - misp
+    networks:
+      - ir-network
+
+  # --- 2. SPLUNK ENTERPRISE (SIEM Graphical UI on port 8000) ---
+  splunk:
+    image: splunk/splunk:latest
+    container_name: splunk
+    environment:
+      - SPLUNK_START_ARGS=--accept-license
+      - SPLUNK_GENERAL_TERMS=--accept-sgt-current-at-splunk-com
+      - SPLUNK_PASSWORD=EduQualSecurePassword2026!
+    ports:
+      - "8000:8000"
+      - "8088:8088"
+    networks:
+      - ir-network
+
+  # --- 3. ELASTICSEARCH (SIEM Database Backend) ---
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "http.host=0.0.0.0"
+      - "transport.host=0.0.0.0"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - ir-network
+
+  # --- 4. KIBANA / ELASTIC SECURITY (Graphical UI on port 5601) ---
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.9
+    container_name: kibana
+    depends_on:
+      - elasticsearch
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks:
+      - ir-network
+
+  # --- 5. MISP REDIS CACHE BACKEND ---
+  misp-redis:
+    image: redis:6-alpine
+    container_name: enterprise_misp_redis
+    networks:
+      - ir-network
+
+  # --- 6. MISP DATABASE BACKEND ---
+  misp-db:
+    image: mariadb:10.6
+    container_name: enterprise_misp_db
+    environment:
+      - MYSQL_DATABASE=misp
+      - MYSQL_LOGIN=misp
+      - MYSQL_USER=misp
+      - MYSQL_PASSWORD=misp_secure_password_2026
+      - MYSQL_ROOT_PASSWORD=root_secure_password_2026
+    volumes:
+      - misp-db-data:/var/lib/mysql
+    networks:
+      - ir-network
+
+  # --- 7. REAL MISP THREAT INTEL PLATFORM (Full Graphical Web UI) ---
+  misp:
+    image: ghcr.io/nukib/misp:latest
+    container_name: enterprise_misp
+    depends_on:
+      - misp-db
+      - misp-redis
+    ports:
+      - "8080:80"
+    environment:
+      - MYSQL_HOST=misp-db
+      - MYSQL_PORT=3306
+      - MYSQL_LOGIN=misp
+      - MYSQL_PASSWORD=misp_secure_password_2026
+      - MYSQL_DATABASE=misp
+      - REDIS_HOST=misp-redis
+      - MISP_BASEURL=http://192.168.56.249:8080
+      - MISP_UUID=0a674a5a-c4cb-491d-80cf-94522858888b
+      - MISP_ORG=EduQualEnterprise
+      - MISP_EMAIL=admin@admin.test
+    networks:
+      - ir-network
+
+volumes:
+    es-data:
+    misp-db-data:
+
+networks:
+    ir-network:
+        driver: bridge
