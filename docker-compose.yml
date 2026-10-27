@@ -1,10 +1,12 @@
-version: '3.8'
-
 services:
   # --- 1. BACKGROUND LOG & THREAT INTEL COLLECTOR ---
   log-collector:
     build: ./log-collector
     container_name: enterprise_log_collector
+    environment:
+      - ES_URL=http://elasticsearch:9200/enterprise-security-logs/_doc/
+      - SPLUNK_HEC_URL=http://splunk:8088/services/collector
+      - MISP_URL=http://misp
     depends_on:
       - elasticsearch
       - misp
@@ -98,7 +100,7 @@ services:
       - MYSQL_PASSWORD=misp_secure_password_2026
       - MYSQL_DATABASE=misp
       - REDIS_HOST=misp-redis
-      - MISP_BASEURL=http://192.168.56.249:8080
+      - MISP_BASEURL=http://20.62.193.42:8080
       - MISP_UUID=0a674a5a-c4cb-491d-80cf-94522858888b
       - MISP_ORG=EduQualEnterprise
       - MISP_EMAIL=admin@admin.test

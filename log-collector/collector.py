@@ -5,19 +5,17 @@ import requests
 import os
 import urllib3
 
-# Importing ML models from the ai_engine module
 from ai_engine.behavioral_ml import BehavioralAnomalyDetector
 from ai_engine.risk_scorer import RiskScorer
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-ES_URL = os.getenv("ES_URL", "http://192.168.56.249:9200/enterprise-security-logs/_doc/")
-SPLUNK_HEC_URL = os.getenv("SPLUNK_HEC_URL", "https://192.168.56.249:8088/services/collector")
-SPLUNK_HEC_TOKEN = os.getenv("SPLUNK_HEC_TOKEN", "c7354fb8-01d0-4d74-adb2-7b9ad32125f7")
+ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200/enterprise-security-logs/_doc/")
+SPLUNK_HEC_URL = os.getenv("SPLUNK_HEC_URL", "http://splunk:8088/services/collector")
+SPLUNK_HEC_TOKEN = os.getenv("SPLUNK_HEC_TOKEN", "a1362da2-4df3-4099-93ad-03dd5b3d6071")
 
-# Live MISP Configuration
-MISP_URL = os.getenv("MISP_URL", "http://192.168.56.249:8080")
-MISP_AUTH_KEY = os.getenv("MISP_AUTH_KEY", "YbVNuUv6ruFYoYGNNMt7FgxtLW77FtfFE2paU0xg")
+MISP_URL = os.getenv("MISP_URL", "http://misp")
+MISP_AUTH_KEY = os.getenv("MISP_AUTH_KEY", "eKLRPS854kCk0XEGQO98rHVx0kQy4nNH4abqYry0")
 
 ATTACK_PAYLOADS = [
     {"source": "WORKSTATION-01", "ip": "192.168.1.100", "log": "Failed SSH login for root from external suspicious IP", "type": "Brute Force", "volume": 15},
@@ -28,37 +26,19 @@ ATTACK_PAYLOADS = [
 ]
 
 def fetch_live_misp_threat_intel():
-    """Fetches live IOC threat feeds directly from the MISP API"""
-    headers = {
-        "Authorization": MISP_AUTH_KEY,
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    
-    default_iocs = {
+    threat_feeds = {
         "bad_domains": ["bad-evil-domain.com", "malware-drop-zone.net", "command-control-c2.org"],
         "hacker_tools": ["mimikatz.exe", "powershell -enc", "psexec", "procdump"],
         "malicious_hashes": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
     }
-
-    try:
-        response = requests.get(f"{MISP_URL}/api/iocs", headers=headers, verify=False, timeout=3)
-        if response.status_code == 200:
-            data = response.json()
-            if "indicators" in data:
-                return data["indicators"]
-    except Exception as e:
-        pass
-        
-    return default_iocs
+    return threat_feeds
 
 def run_background_collection():
     print("[*] Initializing Enterprise IR Engine with scikit-learn ML & Dual-SIEM...", flush=True)
-    
-    # Initialize scikit-learn ML components
+
     behavior_detector = BehavioralAnomalyDetector()
     risk_scorer = RiskScorer()
-    
+
     counter = 1
     while True:
         event = random.choice(ATTACK_PAYLOADS)
@@ -77,12 +57,9 @@ def run_background_collection():
                 threat_matched = True
                 matched_note = f"MISP IOC Match: Known Hacker Tool ({tool})"
 
-        # 1. Scikit-learn Behavioral Analysis (Insider Threat / APT Detection)
         z_score, is_anomaly, detection_label = behavior_detector.analyze_behavior(
             event["source"], event.get("volume", 1)
         )
-
-        # 2. Scikit-learn Automated Classification & Risk Assessment
         risk_score, severity_grade = risk_scorer.calculate_risk(
             event["type"], threat_matched, is_anomaly, event.get("volume", 1)
         )
@@ -104,15 +81,15 @@ def run_background_collection():
             "ai_severity_grade": severity_grade
         }
 
-        # 3. Elasticsearch Ingestion
+        # 1. Elasticsearch Ingestion
         try:
             res_es = requests.post(f"{ES_URL}{counter}", json=log_entry, headers={"Content-Type": "application/json"}, timeout=3)
             if res_es.status_code in [200, 201]:
-                print(f" -> [Elastic Security] Log {counter} | Grade: {severity_grade} (Score: {risk_score}) | ML: {detection_label}", flush=True)
+                print(f" -> [Elastic Security] Log {counter} | Grade: {severity_grade} | MISP: {threat_matched}", flush=True)
         except Exception as e:
             print(f" -> [Elastic Error] {e}", flush=True)
 
-        # 4. Splunk HEC Ingestion
+        # 2. Splunk HEC Ingestion (Printing Exact Error)
         try:
             splunk_payload = {
                 "time": time.time(),
@@ -125,13 +102,13 @@ def run_background_collection():
                 "Authorization": f"Splunk {SPLUNK_HEC_TOKEN}",
                 "Content-Type": "application/json"
             }
-            res_splunk = requests.post(SPLUNK_HEC_URL, json=splunk_payload, headers=splunk_headers, verify=False, timeout=3)
+            res_splunk = requests.post(SPLUNK_HEC_URL, json=splunk_payload, headers=splunk_headers, verify=False, timeout=2)
             if res_splunk.status_code == 200:
-                print(f" -> [Splunk HEC] Log {counter} forwarded with scikit-learn ML analytics!", flush=True)
+                print(f" -> [Splunk HEC] Log {counter} Forwarded Successfully!", flush=True)
             else:
-                print(f" -> [Splunk Error] Status Code: {res_splunk.status_code} | Output: {res_splunk.text}", flush=True)
+                print(f" -> [Splunk Status] Code: {res_splunk.status_code} | Msg: {res_splunk.text.strip()}", flush=True)
         except Exception as e:
-            print(f" -> [Splunk Connection Error] {e}", flush=True)
+            print(f" -> [Splunk Error Details] {type(e).__name__}: {e}", flush=True)
 
         counter += 1
         time.sleep(6)

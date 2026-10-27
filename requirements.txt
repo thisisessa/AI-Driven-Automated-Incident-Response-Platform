@@ -1,24 +1,23 @@
-# --- ML / Analytics ---
-scikit-learn>=1.3.0
-tensorflow>=2.12.0
-pyspark>=3.4.0
+# --- Core Utilities & Python Support ---
+requests==2.31.0
+urllib3==1.26.15
+numpy==1.26.4
+pandas==2.2.0
 
-# --- Integration & SIEM ---
-pymisp>=2.4.170
-elasticsearch>=8.8.0
-splunk-sdk>=1.7.3
-requests>=2.31.0
-urllib3>=1.26.15
+# --- ML & Analytics (scikit-learn, TensorFlow, Apache Spark) ---
+scikit-learn==1.4.0
+tensorflow==2.16.1
+pyspark==3.5.0
 
-# --- Automation & Orchestration ---
-ansible>=8.0.0
-apache-airflow>=2.6.0
+# --- Automation & Orchestration (Airflow, Ansible)[cite: 2, 3] ---
+apache-airflow==2.9.0
+ansible==9.1.0
 
-# --- Forensics & Threat Intelligence ---
-yara-python>=4.3.0
-volatility3>=2.5.0
+# --- Communication APIs (Slack SDK, Microsoft Teams, PagerDuty)[cite: 3] ---
+slack-sdk==3.27.0
+msrest==0.7.1
+pagerduty==2.1.0
 
-# --- Communication & Alerting APIs ---
-slack-sdk>=3.21.0
-botbuilder-core>=4.14.0
-pagerduty>=2.1.0
+# --- Forensics Wrappers (Volatility3 & YARA Python bindings)[cite: 2] ---
+yara-python==4.3.1
+volatility3==2.5.2
