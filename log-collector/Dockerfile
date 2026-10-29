@@ -1,11 +1,18 @@
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
+# System build tools, gcc aur OpenSSL dev headers install karein yara-python ke liye
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir requests numpy pandas scikit-learn
+# Root folder se requirements.txt copy karein aur install karein
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
+# Baqi code copy karein
+COPY log-collector/ .
 
-COPY . /app/
-
-CMD ["python", "-u", "collector.py"]
+CMD ["python3", "collector.py"]

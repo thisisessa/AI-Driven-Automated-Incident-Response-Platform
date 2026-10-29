@@ -1,7 +1,11 @@
+version: '3.8'
+
 services:
   # --- 1. BACKGROUND LOG & THREAT INTEL COLLECTOR ---
   log-collector:
-    build: ./log-collector
+    build:
+      context: .
+      dockerfile: log-collector/Dockerfile
     container_name: enterprise_log_collector
     environment:
       - ES_URL=http://elasticsearch:9200/enterprise-security-logs/_doc/
@@ -108,9 +112,9 @@ services:
       - ir-network
 
 volumes:
-    es-data:
-    misp-db-data:
+  es-data:
+  misp-db-data:
 
 networks:
-    ir-network:
-        driver: bridge
+  ir-network:
+    driver: bridge
