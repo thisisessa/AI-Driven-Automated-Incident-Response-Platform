@@ -1,0 +1,26 @@
+nano ai_engine/Dockerfile
+
+
+
+
+
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# System dependencies aur build tools install karein (ML libraries ke liye zaroori hain)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Requirements file copy karein aur python packages install karein
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Baaki saari AI engine ki files copy karein
+COPY . .
+
+# Agar aap isay standalone service ya worker ke tor par chalana chahte hain
+CMD ["python3", "spark_processor.py"]

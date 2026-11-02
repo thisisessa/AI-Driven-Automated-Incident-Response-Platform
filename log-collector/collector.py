@@ -15,7 +15,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200/enterprise-security-logs/_doc/")
 SPLUNK_HEC_URL = os.getenv("SPLUNK_HEC_URL", "http://splunk:8088/services/collector")
-SPLUNK_HEC_TOKEN = os.getenv("SPLUNK_HEC_TOKEN", "cc758cae-10ed-4283-943e-114f025e192e")
+SPLUNK_HEC_TOKEN = os.getenv("SPLUNK_HEC_TOKEN", "21a83cb6-dc98-4073-8145-ad2e063b25c8")
 
 MISP_URL = os.getenv("MISP_URL", "http://misp")
 MISP_AUTH_KEY = os.getenv("MISP_AUTH_KEY", "eKLRPS854kCk0XEGQO98rHVx0kQy4nNH4abqYry0")
