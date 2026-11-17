@@ -226,6 +226,20 @@ class IncidentIntegrator:
             f"Alert ID: {alert_data.get('alert_id', 'Not provided')}\n"
         )
 
+        # === MISP Tag Add Karne Ka Code (Gap 3 Fix) ===
+        tags = [
+            "SOAR",
+            "Auto-Response",
+            alert_data.get("attack_type", "General"),
+            alert_tag
+        ]
+        
+        misp_event_id = decision_meta.get("misp_event_id")
+        if misp_event_id:
+            tags.append(f"misp-event-{misp_event_id}")
+            logger.info(f"[THEHIVE] MISP event ID {misp_event_id} added to case tags.")
+        # ===============================================
+
         payload = {
             "title": title,
             "description": description,
@@ -233,12 +247,7 @@ class IncidentIntegrator:
                 3 if decision_meta.get("is_dangerous") else 2
             ),
             "startDate": int(time.time() * 1000),
-            "tags": [
-                "SOAR",
-                "Auto-Response",
-                alert_data.get("attack_type", "General"),
-                alert_tag
-            ],
+            "tags": tags,  # <-- Yahan updated tags list use ho rahi hai
             "flag": bool(decision_meta.get("is_dangerous", False))
         }
 

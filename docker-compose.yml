@@ -5,12 +5,17 @@ services:
       context: .
       dockerfile: log-collector/Dockerfile
     container_name: enterprise_log_collector
+    ports:
+      - "4040:4040"
     environment:
       - ES_URL=http://elasticsearch:9200/enterprise-security-logs/_doc/
       - SPLUNK_HEC_URL=http://splunk:8088/services/collector
-      - SPLUNK_HEC_TOKEN=${SPLUNK_HEC_TOKEN:?Set SPLUNK_HEC_TOKEN in .env}
+      - SPLUNK_HEC_TOKEN=${SPLUNK_HEC_TOKEN}
       - MISP_URL=http://misp
-      - MISP_API_KEY=${MISP_API_KEY:?Set MISP_API_KEY in .env}
+      - MISP_API_KEY=${MISP_API_KEY}
+    volumes:
+      - /var/log/auth.log:/host-logs/auth.log:ro
+      - /var/log/syslog:/host-logs/syslog:ro
     depends_on:
       - elasticsearch
       - misp
@@ -24,7 +29,7 @@ services:
     environment:
       - SPLUNK_START_ARGS=--accept-license
       - SPLUNK_GENERAL_TERMS=--accept-sgt-current-at-splunk-com
-      - SPLUNK_PASSWORD=${SPLUNK_PASSWORD:?Set SPLUNK_PASSWORD in .env}
+      - SPLUNK_PASSWORD=${SPLUNK_PASSWORD}
     ports:
       - "8000:8000"
       - "8088:8088"
@@ -61,6 +66,7 @@ services:
       - elasticsearch
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_HOST=0.0.0.0
     ports:
       - "5601:5601"
     networks:
@@ -81,8 +87,8 @@ services:
       - MYSQL_DATABASE=misp
       - MYSQL_LOGIN=misp
       - MYSQL_USER=misp
-      - MYSQL_PASSWORD=${MISP_DB_PASSWORD:?Set MISP_DB_PASSWORD in .env}
-      - MYSQL_ROOT_PASSWORD=${MISP_DB_ROOT_PASSWORD:?Set MISP_DB_ROOT_PASSWORD in .env}
+      - MYSQL_PASSWORD=${MISP_DB_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${MISP_DB_ROOT_PASSWORD}
     volumes:
       - misp-db-data:/var/lib/mysql
     networks:
@@ -101,7 +107,7 @@ services:
       - MYSQL_HOST=misp-db
       - MYSQL_PORT=3306
       - MYSQL_LOGIN=misp
-      - MYSQL_PASSWORD=${MISP_DB_PASSWORD:?Set MISP_DB_PASSWORD in .env}
+      - MYSQL_PASSWORD=${MISP_DB_PASSWORD}
       - MYSQL_DATABASE=misp
       - REDIS_HOST=misp-redis
       - MISP_BASEURL=http://20.127.208.107:8080
@@ -119,7 +125,7 @@ services:
       - elasticsearch
     command:
       - --secret
-      - ${CORTEX_SECRET:?Set CORTEX_SECRET in .env}
+      - ${CORTEX_SECRET}
       - --es-uri
       - http://elasticsearch:9200
       - --analyzer-url
@@ -148,7 +154,7 @@ services:
     environment:
       - CORTEX_PORT=9001
       - THEDEF_DEFAULT_ADMIN_USER=admin@thehive.org
-      - THEDEF_DEFAULT_ADMIN_PASSWORD=${THEHIVE_ADMIN_PASSWORD:?Set THEHIVE_ADMIN_PASSWORD in .env}
+      - THEDEF_DEFAULT_ADMIN_PASSWORD=${THEHIVE_ADMIN_PASSWORD}
     ports:
       - "9000:9000"
     networks:
@@ -166,18 +172,27 @@ services:
       - cortex
       - misp
       - elasticsearch
+      - splunk
     environment:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ES_URL=http://elasticsearch:9200/enterprise-security-logs/_doc/
+      - SPLUNK_HEC_URL=http://splunk:8088/services/collector
+      - SPLUNK_HEC_TOKEN=${SPLUNK_HEC_TOKEN}
       - THEHIVE_URL=http://thehive:9000
-      - THEHIVE_API_KEY=${THEHIVE_API_KEY:?Set THEHIVE_API_KEY in .env}
+      - THEHIVE_API_KEY=${THEHIVE_API_KEY}
       - THEHIVE_ORG=EduQual_SOC
       - CORTEX_URL=http://cortex:9001
-      - CORTEX_API_KEY=${CORTEX_API_KEY:?Set CORTEX_API_KEY in .env}
+      - CORTEX_API_KEY=${CORTEX_API_KEY}
       - MISP_URL=http://misp:80
-      - MISP_API_KEY=${MISP_API_KEY:?Set MISP_API_KEY in .env}
+      - MISP_API_KEY=${MISP_API_KEY}
+      - PYTHONPATH=/app:/app/ai_engine_parent
     volumes:
       - ./soar-service/dags:/opt/airflow/dags
       - ./soar-service/engine:/app/engine
+      - ./soar-service/threat_simulator.py:/app/threat_simulator.py
+      - ./soar-service/dags:/app/dags
+      - ./ai_engine:/app/ai_engine
+      - ./ai_engine:/app/ai_engine_parent/ai_engine
     ports:
       - "8085:8080"
     networks:

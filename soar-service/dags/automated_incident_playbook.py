@@ -4,11 +4,11 @@ from airflow.operators.python import PythonOperator
 import os
 import sys
 
-# Add Engine path to Python sys path
 sys.path.append("/app")
 
 from engine.decision_tree import DynamicDecisionEngine
 from engine.thehive_cortex_integrator import IncidentIntegrator
+from engine.action_executor import ActionExecutor
 
 default_args = {
     'owner': 'EduQual_DevSecOps',
@@ -22,56 +22,50 @@ default_args = {
 dag = DAG(
     'SOAR_Automated_Playbook_Workflow',
     default_args=default_args,
-    description='Orchestrates Threat Evaluation, Cortex Checks, and TheHive Case Creation',
-    schedule_interval=timedelta(seconds=30),  # Polls every 30 seconds
+    description='GAP 4 FIX: Orchestrates Threat Simulation → Decision → Case → Response',
+    schedule_interval=timedelta(seconds=60),  # Every 60s
     catchup=False
 )
 
-def poll_and_evaluate_alerts(**kwargs):
-    """
-    Step 1: Poll active threat logs and pass to Decision Tree.
-    """
-    sample_alert = {
-        "attack_type": "Ransomware_Execution_Attempt",
-        "source_ip": "185.220.101.5",
-        "misp_ioc_match": True,
-        "failed_attempts": 14
-    }
+def generate_threat(**kwargs):
+    """Step 1: Generate threat (simulated)"""
+    from threat_simulator import ThreatSimulator
+    sim = ThreatSimulator()
+    alert_data = sim.generate_threat_payload()
+    print(f"[AIRFLOW] Generated threat: {alert_data['attack_type']} from {alert_data['source_ip']}")
+    kwargs['ti'].xcom_push(key='alert_data', value=alert_data)
+    return alert_data['alert_id']
 
+def poll_and_evaluate(**kwargs):
+    """Step 2: AI Decision Engine (ML + MISP + TensorFlow)"""
+    ti = kwargs['ti']
+    alert_data = ti.xcom_pull(key='alert_data', task_ids='generate_threat')
     engine = DynamicDecisionEngine()
-    decision = engine.evaluate_threat_context(sample_alert)
-
-    kwargs['ti'].xcom_push(key='alert_data', value=sample_alert)
-    kwargs['ti'].xcom_push(key='decision_meta', value=decision)
+    decision = engine.evaluate_threat_context(alert_data)
+    print(f"[AIRFLOW] Decision: Score={decision['calculated_score']} | Playbook={decision['playbook']}")
+    ti.xcom_push(key='decision_meta', value=decision)
+    return decision['playbook']
 
 def execute_incident_response(**kwargs):
-    """
-    Step 2: Streamlined Incident Response handling Case creation, 
-            Observable addition, and Cortex Job Execution in one flow.
-    """
+    """Step 3: TheHive + Cortex + Action Execution"""
     ti = kwargs['ti']
-    alert_data = ti.xcom_pull(key='alert_data', task_ids='poll_and_evaluate')
+    alert_data = ti.xcom_pull(key='alert_data', task_ids='generate_threat')
     decision_meta = ti.xcom_pull(key='decision_meta', task_ids='poll_and_evaluate')
 
     integrator = IncidentIntegrator()
     response_res = integrator.create_thehive_case(alert_data, decision_meta)
-    print(f"Automated SOAR Pipeline Executed Successfully. Results: {response_res}")
+
+    executor = ActionExecutor()
+    action_res = executor.execute_playbook_action(decision_meta, alert_data)
+
+    print(f"[AIRFLOW] Response executed: {response_res}")
+    print(f"[AIRFLOW] Actions: {action_res}")
     ti.xcom_push(key='response_result', value=response_res)
+    return "SUCCESS"
 
-# Define DAG Tasks
-t1 = PythonOperator(
-    task_id='poll_and_evaluate',
-    python_callable=poll_and_evaluate_alerts,
-    provide_context=True,
-    dag=dag,
-)
+# DAG Tasks
+t1 = PythonOperator(task_id='generate_threat', python_callable=generate_threat, provide_context=True, dag=dag)
+t2 = PythonOperator(task_id='poll_and_evaluate', python_callable=poll_and_evaluate, provide_context=True, dag=dag)
+t3 = PythonOperator(task_id='execute_incident_response', python_callable=execute_incident_response, provide_context=True, dag=dag)
 
-t2 = PythonOperator(
-    task_id='execute_incident_response',
-    python_callable=execute_incident_response,
-    provide_context=True,
-    dag=dag,
-)
-
-# Set Sequential Dependency Pipeline
-t1 >> t2
+t1 >> t2 >> t3

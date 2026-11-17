@@ -1,10 +1,9 @@
-import time
-import random
-import json
-import requests
 import os
+import re
+import time
+import requests
 import urllib3
-from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from ai_engine.behavioral_ml import BehavioralAnomalyDetector
 from ai_engine.risk_scorer import RiskScorer
@@ -17,138 +16,273 @@ ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200/enterprise-security-logs
 SPLUNK_HEC_URL = os.getenv("SPLUNK_HEC_URL", "http://splunk:8088/services/collector")
 SPLUNK_HEC_TOKEN = os.getenv("SPLUNK_HEC_TOKEN")
 
-MISP_URL = os.getenv("MISP_URL", "http://misp")
-MISP_AUTH_KEY = os.getenv("MISP_API_KEY")
+AUTH_LOG = "/host-logs/auth.log"
+SYSLOG = "/host-logs/syslog"
+LOG_PATHS = [AUTH_LOG, SYSLOG]
 
-ATTACK_PAYLOADS = [
-    {"source": "WORKSTATION-01", "ip": "192.168.1.100", "log": "Failed SSH login for root from external suspicious IP", "type": "Brute Force", "volume": 15},
-    {"source": "WORKSTATION-05", "ip": "10.0.0.45", "log": "PowerShell execution downloading payload from malicious domain bad-evil-domain.com", "type": "APT / Malicious URL", "volume": 2},
-    {"source": "SERVER-DB-02", "ip": "172.16.0.12", "log": "Mass file rename to .locked extension with ransom note drop", "type": "Ransomware", "volume": 50},
-    {"source": "WORKSTATION-09", "ip": "192.168.1.50", "log": "Unusual off-hours database query and mass export by internal employee", "type": "Insider Threat", "volume": 90},
-    {"source": "WORKSTATION-09", "ip": "192.168.1.50", "log": "Standard HTTP GET request /index.html 200 OK", "type": "Normal Traffic", "volume": 1}
+LINE_RE = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T[^\s]+)\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"(?P<message>.*)$"
+)
+
+# Real attack / suspicious patterns on the host
+ATTACK_PATTERNS = [
+    (re.compile(r"Failed password|authentication failure|Invalid user", re.I), "Brute Force / Auth Failure", 25, True),
+    (re.compile(r"Connection reset by authenticating|banner exchange.*invalid", re.I), "SSH Probe / Preauth Abuse", 15, True),
+    (re.compile(r"POSSIBLE BREAK-IN ATTEMPT|repeated login failures", re.I), "Break-in Attempt", 40, True),
+    (re.compile(r"sudo:.*COMMAND=|sudo:.*authentication failure", re.I), "Privileged Command / Sudo", 10, False),
 ]
 
+# All benign activity labeled as Normal Traffic for Kibana/Splunk clarity
+NORMAL_PATTERNS = [
+    (re.compile(r"session opened|session closed", re.I), "Normal Traffic", 1),
+    (re.compile(r"CRON\[", re.I), "Normal Traffic", 1),
+    (re.compile(r"Accepted publickey|Accepted password", re.I), "Normal Traffic", 2),
+]
+
+
+def classify_message(message: str):
+    for pattern, event_type, volume, is_attack in ATTACK_PATTERNS:
+        if pattern.search(message):
+            return event_type, volume, is_attack
+    for pattern, event_type, volume in NORMAL_PATTERNS:
+        if pattern.search(message):
+            return event_type, volume, False
+    return "Normal Traffic", 1, False
+
+
+def extract_source_ip(message: str):
+    match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", message)
+    return match.group(0) if match else None
+
+
+def parse_line(line: str, log_file: str):
+    line = line.strip()
+    if not line:
+        return None
+    m = LINE_RE.match(line)
+    if not m:
+        return None
+
+    message = m.group("message")
+    event_type, volume, is_attack = classify_message(message)
+    source_ip = extract_source_ip(message)
+
+    return {
+        "timestamp": m.group("timestamp"),
+        "host": m.group("hostname"),
+        "source_ip": source_ip,
+        "event_type": event_type,
+        "message": message,
+        "volume": volume,
+        "is_attack_signal": is_attack,
+        "event_source": "azure_system",
+        "log_file": Path(log_file).name,
+        "pipeline": "real-system-log-collector",
+    }
+
+
 def fetch_live_misp_threat_intel():
-    threat_feeds = {
+    return {
         "bad_domains": ["bad-evil-domain.com", "malware-drop-zone.net", "command-control-c2.org"],
         "hacker_tools": ["mimikatz.exe", "powershell -enc", "psexec", "procdump"],
-        "malicious_hashes": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
+        "malicious_ips": ["185.220.101.", "45.33.32.", "198.51.100."],
     }
-    return threat_feeds
+
+
+def check_misp_match(event: dict, threat_intel: dict):
+    message = event.get("message", "")
+    source_ip = event.get("source_ip") or ""
+
+    for domain in threat_intel.get("bad_domains", []):
+        if domain in message:
+            return True, f"MISP IOC Match: Malicious Domain ({domain})"
+
+    for tool in threat_intel.get("hacker_tools", []):
+        if tool.lower() in message.lower():
+            return True, f"MISP IOC Match: Known Hacker Tool ({tool})"
+
+    for ip_prefix in threat_intel.get("malicious_ips", []):
+        if source_ip.startswith(ip_prefix):
+            return True, f"MISP IOC Match: Suspicious IP prefix ({ip_prefix}*)"
+
+    if event.get("is_attack_signal"):
+        return False, "Host attack signal (no external IOC match)"
+
+    return False, "Clean"
+
+
+def enrich_with_ai(raw_event, behavior_detector, risk_scorer, deep_threat_engine, spark_processor):
+    threat_intel = fetch_live_misp_threat_intel()
+    threat_matched, matched_note = check_misp_match(raw_event, threat_intel)
+
+    batched = spark_processor.process_log_stream_batch([raw_event])
+    processed = batched[0] if batched else raw_event
+
+    z_score, is_anomaly, detection_label = behavior_detector.analyze_behavior(
+        processed["host"], processed.get("volume", 1)
+    )
+    risk_score, severity_grade = risk_scorer.calculate_risk(
+        processed["event_type"], threat_matched, is_anomaly, processed.get("volume", 1)
+    )
+    deep_res = deep_threat_engine.predict_deep_threat(
+        risk_score=risk_score,
+        anomaly_score=z_score,
+        misp_match=threat_matched,
+        time_dev=0.5,
+        payload_size=processed.get("volume", 1) * 10,
+    )
+
+    return {
+        "timestamp": processed.get("timestamp", raw_event["timestamp"]),
+        "host": processed.get("host", raw_event["host"]),
+        "source_ip": processed.get("source_ip", raw_event.get("source_ip")),
+        "event_type": processed.get("event_type", raw_event["event_type"]),
+        "message": processed.get("message", raw_event["message"]),
+        "volume": processed.get("volume", raw_event.get("volume", 1)),
+        "event_source": "azure_system",
+        "log_file": raw_event.get("log_file"),
+        "pipeline": "real-system-log-collector",
+        "is_attack_signal": raw_event.get("is_attack_signal", False),
+        "misp_threat_intel_matched": threat_matched,
+        "intelligence_note": matched_note,
+        "scikit_learn_ml_analysis": {
+            "isolation_forest_score": z_score,
+            "is_behavioral_anomaly": is_anomaly,
+            "model_detection_label": detection_label,
+        },
+        "tensorflow_deep_analysis": deep_res,
+        "ai_risk_score": risk_score,
+        "ai_severity_grade": severity_grade,
+    }
+
+
+def forward_elasticsearch(doc: dict, doc_id: str):
+    try:
+        res = requests.post(
+            f"{ES_URL}{doc_id}",
+            json=doc,
+            headers={"Content-Type": "application/json"},
+            timeout=3,
+        )
+        if res.status_code in (200, 201):
+            print(
+                f" -> [Elastic Security] {doc_id} | {doc['event_type']} | "
+                f"Grade: {doc['ai_severity_grade']} | TF: {doc['tensorflow_deep_analysis'].get('tensorflow_deep_score')}% | "
+                f"AttackSignal: {doc['is_attack_signal']}",
+                flush=True,
+            )
+        else:
+            print(f" -> [Elastic Status] {res.status_code}: {res.text[:120]}", flush=True)
+    except Exception as e:
+        print(f" -> [Elastic Error] {e}", flush=True)
+
+
+def forward_splunk(doc: dict):
+    if not SPLUNK_HEC_TOKEN:
+        return
+    try:
+        payload = {
+            "time": time.time(),
+            "host": doc.get("host", "unknown"),
+            "source": "azure-system-logs",
+            "sourcetype": "_json",
+            "event": doc,
+        }
+        headers = {
+            "Authorization": f"Splunk {SPLUNK_HEC_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        res = requests.post(
+            SPLUNK_HEC_URL, json=payload, headers=headers, verify=False, timeout=2
+        )
+        if res.status_code == 200:
+            print(f" -> [Splunk HEC] Forwarded | {doc['event_type']}", flush=True)
+        else:
+            print(f" -> [Splunk Status] {res.status_code}: {res.text.strip()[:120]}", flush=True)
+    except Exception as e:
+        print(f" -> [Splunk Error] {type(e).__name__}: {e}", flush=True)
+
+
+def seed_recent_lines(path, max_lines, process_fn, counter_start):
+    """Send last N lines once so dashboards are not empty after restart."""
+    counter = counter_start
+    if not os.path.exists(path):
+        print(f"[!] Missing log: {path}", flush=True)
+        return counter
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()[-max_lines:]
+        for line in lines:
+            raw = parse_line(line, path)
+            if not raw:
+                continue
+            doc = process_fn(raw)
+            doc_id = f"sys-{counter}"
+            forward_elasticsearch(doc, doc_id)
+            forward_splunk(doc)
+            counter += 1
+    except Exception as e:
+        print(f"[!] Seed error {path}: {e}", flush=True)
+    return counter
+
 
 def run_background_collection():
-    print("[*] Initializing Enterprise IR Engine with scikit-learn, TensorFlow & Apache Spark...", flush=True)
+    print("[*] Real System Log Collector starting (no random fake attacks)...", flush=True)
+    print(f"[*] Watching: {AUTH_LOG}, {SYSLOG}", flush=True)
 
     behavior_detector = BehavioralAnomalyDetector()
     risk_scorer = RiskScorer()
-
-    # Initialize TensorFlow & Spark engines for 30GB RAM server
     deep_threat_engine = EnterpriseDeepThreatEngine()
     spark_processor = EnterpriseSparkLogProcessor()
 
+    def process_fn(raw):
+        return enrich_with_ai(
+            raw, behavior_detector, risk_scorer, deep_threat_engine, spark_processor
+        )
+
     counter = 1
+    counter = seed_recent_lines(AUTH_LOG, 15, process_fn, counter)
+    counter = seed_recent_lines(SYSLOG, 10, process_fn, counter)
+
+    positions = {}
+    for path in LOG_PATHS:
+        if os.path.exists(path):
+            positions[path] = os.path.getsize(path)
+
+    print("[*] Live tail active — Normal Traffic + real attacks only", flush=True)
+
     while True:
-        event = random.choice(ATTACK_PAYLOADS)
-        threat_intel = fetch_live_misp_threat_intel()
+        for path in LOG_PATHS:
+            if not os.path.exists(path):
+                continue
+            try:
+                size = os.path.getsize(path)
+                pos = positions.get(path, size)
+                if size < pos:
+                    pos = 0
+                if size > pos:
+                    with open(path, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(pos)
+                        for line in f:
+                            raw = parse_line(line, path)
+                            if not raw:
+                                continue
+                            doc = process_fn(raw)
+                            doc_id = f"sys-{counter}"
+                            forward_elasticsearch(doc, doc_id)
+                            forward_splunk(doc)
+                            counter += 1
+                        positions[path] = f.tell()
+            except Exception as e:
+                print(f"[!] Tail error {path}: {e}", flush=True)
 
-        threat_matched = False
-        matched_note = "Clean"
+        time.sleep(2)
 
-        for domain in threat_intel.get("bad_domains", []):
-            if domain in event["log"]:
-                threat_matched = True
-                matched_note = f"MISP IOC Match: Malicious Web Address ({domain})"
-
-        for tool in threat_intel.get("hacker_tools", []):
-            if tool in event["log"]:
-                threat_matched = True
-                matched_note = f"MISP IOC Match: Known Hacker Tool ({tool})"
-
-        # 1. Apache Spark Batch Processing Simulation on Raw Event (PKT Timezone)
-        pkt_time = datetime.now(timezone(timedelta(hours=5)))
-        raw_event_dict = {
-            "timestamp": pkt_time.strftime("%Y-%m-%dT%H:%M:%S+05:00"),
-            "host": event["source"],
-            "source_ip": event["ip"],
-            "event_type": event["type"],
-            "message": event["log"],
-            "volume": event.get("volume", 1)
-        }
-        batched_logs = spark_processor.process_log_stream_batch([raw_event_dict])
-
-        print(f"-> [Apache Spark Engine] Batch Processed Log | Host: {raw_event_dict['host']} | Event: {raw_event_dict['event_type']}")
-
-        processed_event = batched_logs[0] if batched_logs else raw_event_dict
-
-        # 2. scikit-learn Behavioral Analysis & Risk Scoring
-        z_score, is_anomaly, detection_label = behavior_detector.analyze_behavior(
-            processed_event["host"], processed_event["volume"]
-        )
-        risk_score, severity_grade = risk_scorer.calculate_risk(
-            processed_event["event_type"], threat_matched, is_anomaly, processed_event["volume"]
-        )
-
-        # 3. TensorFlow Deep Learning Neural Network Prediction
-        deep_res = deep_threat_engine.predict_deep_threat(
-            risk_score=risk_score,
-            anomaly_score=z_score,
-            misp_match=threat_matched,
-            time_dev=0.5,
-            payload_size=processed_event["volume"] * 10
-        )
-
-        log_entry = {
-            "timestamp": processed_event["timestamp"],
-            "host": processed_event["host"],
-            "source_ip": processed_event["source_ip"],
-            "event_type": processed_event["event_type"],
-            "message": processed_event["message"],
-            "misp_threat_intel_matched": threat_matched,
-            "intelligence_note": matched_note,
-            "scikit_learn_ml_analysis": {
-                "isolation_forest_score": z_score,
-                "is_behavioral_anomaly": is_anomaly,
-                "model_detection_label": detection_label
-            },
-            "tensorflow_deep_analysis": deep_res,
-            "ai_risk_score": risk_score,
-            "ai_severity_grade": severity_grade
-        }
-
-        # 4. Elasticsearch Ingestion
-        try:
-            res_es = requests.post(f"{ES_URL}{counter}", json=log_entry, headers={"Content-Type": "application/json"}, timeout=3)
-            if res_es.status_code in [200, 201]:
-                print(f" -> [Elastic Security] Log {counter} | Grade: {severity_grade} | TF Score: {deep_res['tensorflow_deep_score']}% | MISP: {threat_matched}", flush=True)
-        except Exception as e:
-            print(f" -> [Elastic Error] {e}", flush=True)
-
-        # 5. Splunk HEC Ingestion
-        try:
-            splunk_payload = {
-                "time": time.time(),
-                "host": event["source"],
-                "source": "enterprise-ai-pipeline",
-                "sourcetype": "_json",
-                "event": log_entry
-            }
-            splunk_headers = {
-                "Authorization": f"Splunk {SPLUNK_HEC_TOKEN}",
-                "Content-Type": "application/json"
-            }
-            res_splunk = requests.post(SPLUNK_HEC_URL, json=splunk_payload, headers=splunk_headers, verify=False, timeout=2)
-            if res_splunk.status_code == 200:
-                print(f" -> [Splunk HEC] Log {counter} Forwarded Successfully!", flush=True)
-            else:
-                print(f" -> [Splunk Status] Code: {res_splunk.status_code} | Msg: {res_splunk.text.strip()}", flush=True)
-        except Exception as e:
-            print(f" -> [Splunk Error Details] {type(e).__name__}: {e}", flush=True)
-
-        counter += 1
-        time.sleep(6)
 
 if __name__ == "__main__":
     try:
         run_background_collection()
     except KeyboardInterrupt:
-        print("\n[*] Shutting down pipeline gracefully...")
+        print("\n[*] Shutting down real system log collector...")
