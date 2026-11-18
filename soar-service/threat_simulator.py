@@ -58,7 +58,7 @@ class ThreatSimulator:
         attack_tactics = [
             {
                 "attack_type": "Insider_Data_Exfiltration",
-                "source_ip": "10.0.4.55",
+                "source_ip": "203.0.113.50",  # <--- YAHAN PUBLIC IP KAR DIYA HAI (Pehle 10.0.4.55 tha)
                 "host": "HR-WORKSTATION-09",
                 "user": "j.smith",
                 "payload_details": "User j.smith accessed 500+ sensitive files at 2:00 AM and uploaded 2.5GB to external cloud storage.",
@@ -222,7 +222,7 @@ class ThreatSimulator:
         # === SOAR PIPELINE ===
         print("\n[SOAR ENGINE] Triggering Automated Response Pipeline...")
         print(f"[SOAR] Target IP for response actions: {alert_data['source_ip']}")
-        
+
         # decision_meta ke andar MISP ID pass ho rahi hai, jo integrator use karega
         soar_result = self.integrator.create_thehive_case(alert_data, decision_meta)
 
