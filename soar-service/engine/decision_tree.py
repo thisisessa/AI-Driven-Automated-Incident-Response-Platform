@@ -1,10 +1,13 @@
 import os
 import json
+import time
 import logging
 from ai_engine.risk_scorer import RiskScorer
 from ai_engine.deep_threat_net import EnterpriseDeepThreatEngine
 
 logger = logging.getLogger("SOAR-Decision-Engine")
+
+MAPPING_FILE = "misp_mapping.json"
 
 class DynamicDecisionEngine:
     def __init__(self):
@@ -13,54 +16,120 @@ class DynamicDecisionEngine:
         self.risk_scorer = RiskScorer()
         self.deep_engine = EnterpriseDeepThreatEngine()
 
-    def check_misp_intel(self, source_ip):
-        """
-        GAP 3 FIX: MISP Event ID print karo
-        """
-        # Real MISP API call (agar available hai)
+    def _load_mapping(self):
+        if os.path.exists(MAPPING_FILE):
+            try:
+                with open(MAPPING_FILE, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    def _save_mapping(self, mapping):
         try:
-            from pymisp import PyMISP
+            with open(MAPPING_FILE, 'w') as f:
+                json.dump(mapping, f, indent=4)
+        except Exception as e:
+            logger.error(f"[MAPPING ERROR] Could not save mapping: {e}")
+
+    # Yahan attack_type pass kiya hai taake event ka naam aur tags dynamic ho sakein
+    def check_misp_intel(self, source_ip, attack_type="Unknown Attack"):
+        mapping = self._load_mapping()
+
+        # 1. Local Memory Check
+        if source_ip in mapping:
+            logger.info(f"[MISP MEMORY HIT] IP={source_ip} found in local JSON memory.")
+            return {"matched": True, "event_id": mapping[source_ip], "info": "Locally mapped MISP Event"}
+
+        # 2. Real MISP API Check & Auto-Create
+        try:
+            from pymisp import PyMISP, MISPEvent, MISPAttribute
             misp_url = os.getenv("MISP_URL", "https://misp.local")
             misp_key = os.getenv("MISP_API_KEY", "")
+
             if misp_key:
                 misp = PyMISP(misp_url, misp_key, ssl=False, timeout=5)
-                results = misp.search(controller='attributes', value=source_ip, type_attribute='ip-src')
-                if results:
-                    event = results[0].get('Event', {})
-                    event_id = event.get('id', 'UNKNOWN')
-                    event_info = event.get('info', 'N/A')
-                    logger.info(f"[MISP HIT] Source IP={source_ip} MATCHED!")
-                    logger.info(f"[MISP HIT] Event ID={event_id} | Info={event_info}")
-                    return {"matched": True, "event_id": event_id, "info": event_info}
-        except Exception as e:
-            logger.debug(f"[MISP] Lookup skipped: {e}")
 
-        # Fallback: MISP database se direct lookup (simulated)
-        logger.info(f"[MISP] Simulated lookup for IP={source_ip} (MISP DB)")
-        # Demo ke liye: known malicious IPs
-        known_iocs = {
-            "185.143.223.17": {"event_id": "2114", "info": "Enterprise Attack - DDoS Botnet"},
-            "91.219.237.45": {"event_id": "2113", "info": "APT - Zero Day Exploitation"},
-            "103.27.202.88": {"event_id": "2110", "info": "Ransomware Campaign 2026"},
-            "185.220.101.100": {"event_id": "2108", "info": "Tor Exit Node / APT Recon"},
-        }
-        if source_ip in known_iocs:
-            info = known_iocs[source_ip]
-            logger.info(f"[MISP HIT] Source IP={source_ip} MATCHED!")
-            logger.info(f"[MISP HIT] Event ID={info['event_id']} | Info={info['info']}")
-            return {"matched": True, "event_id": info['event_id'], "info": info['info']}
-        return {"matched": False}
+                results = misp.search(controller='attributes', value=source_ip, pythonify=True)
+
+                if results:
+                    event_id = str(results[0].Event.id)
+                    event_info = results[0].Event.info
+                    logger.info(f"[MISP API HIT] IP={source_ip} matched Event ID={event_id}")
+                    mapping[source_ip] = event_id
+                    self._save_mapping(mapping)
+                    return {"matched": True, "event_id": event_id, "info": event_info}
+
+                else:
+                    logger.info(f"[MISP AUTO-CREATE] New IP {source_ip} detected. Creating new MISP event...")
+
+                    event = MISPEvent()
+                    
+                    # --- CHANGE 1: PROFESSIONAL DYNAMIC NAMING ---
+                    event.info = f"Simulated {attack_type} from {source_ip}"
+                    
+                    event.distribution = 0
+                    event.threat_level_id = 2
+                    event.analysis = 0
+                    
+                    # --- CHANGE 2: PROFESSIONAL COLORFUL TAGS ---
+                    event.add_tag('tlp:clear')
+                    event.add_tag('type:OSINT')
+                    event.add_tag('simulation')
+                    event.add_tag(f'attack-type:{attack_type}')
+                    event.add_tag('mitre-attack')
+
+                    attr = MISPAttribute()
+                    attr.type = 'ip-src'
+                    attr.value = source_ip
+                    attr.category = 'Network activity'
+                    attr.to_ids = True
+                    attr.distribution = 0
+                    event.attributes.append(attr)
+
+                    new_event = misp.add_event(event)
+
+                    # --- BULLETPROOF ID EXTRACTION ---
+                    if hasattr(new_event, 'id'):
+                        event_id = str(new_event.id)
+                    elif isinstance(new_event, dict) and 'id' in new_event:
+                        event_id = str(new_event['id'])
+                    elif isinstance(new_event, dict) and 'Event' in new_event:
+                        event_id = str(new_event['Event']['id'])
+                    else:
+                        time.sleep(2)
+                        chk = misp.search(controller='events', value=source_ip, pythonify=True)
+                        if chk:
+                            ev2 = chk[0].get('Event', {})
+                            event_id = str(ev2.get('id') if isinstance(ev2, dict) else ev2.id)
+                        else:
+                            raise ValueError(f"Could not parse ID from MISP response: {new_event}")
+                    
+                    logger.info(f"[MISP AUTO-CREATE] Successfully created Event {event_id} with IP {source_ip}")
+                    mapping[source_ip] = event_id
+                    self._save_mapping(mapping)
+
+                    return {"matched": True, "event_id": event_id, "info": "New MISP Event"}
+
+        except Exception as e:
+            logger.error(f"[MISP API ERROR] Failed to create event: {e}")
+
+        # 3. Fallback
+        fallback_event_id = str(int(time.time()))
+        logger.warning(f"[MISP FALLBACK] MISP API DOWN. Generating Local ID: {fallback_event_id} for IP: {source_ip}")
+        mapping[source_ip] = fallback_event_id
+        self._save_mapping(mapping)
+        return {"matched": True, "event_id": fallback_event_id, "info": "Dynamic Simulated Event"}
 
     def evaluate_threat_context(self, alert_data):
         attack_type = alert_data.get("attack_type", "General")
         src_ip = alert_data.get("source_ip", "")
         failed_attempts = alert_data.get("failed_attempts", 0)
 
-        # === MISP MATCHING (GAP 3) ===
-        misp_result = self.check_misp_intel(src_ip)
+        # Yahan humne attack_type bhi pass kar diya
+        misp_result = self.check_misp_intel(src_ip, attack_type)
         ioc_matched = misp_result.get("matched", False)
 
-        # === ML RISK SCORE (GAP 1) ===
         is_anomaly = attack_type in ["Insider_Threat", "Insider_Data_Exfiltration"]
         ml_score, ml_severity = self.risk_scorer.calculate_risk(
             event_type=attack_type,
@@ -68,9 +137,7 @@ class DynamicDecisionEngine:
             is_anomaly=is_anomaly,
             volume=failed_attempts
         )
-        logger.info(f"[DECISION ENGINE] ML-based Risk Score={ml_score} | Severity={ml_severity}")
 
-        # === DEEP THREAT ANALYSIS (TensorFlow) ===
         deep_result = self.deep_engine.predict_deep_threat(
             risk_score=ml_score,
             anomaly_score=failed_attempts,
@@ -78,19 +145,13 @@ class DynamicDecisionEngine:
             time_dev=0.5,
             payload_size=failed_attempts * 10
         )
-        logger.info(f"[DECISION ENGINE] TensorFlow Deep Score={deep_result['tensorflow_deep_score']} | Advanced Threat={deep_result['is_advanced_threat']}")
 
-        # === PLAYBOOK SELECTION ===
         playbook_map = {
             "Ransomware_Execution_Attempt": ("PLAYBOOK_RANSOMWARE_CONTAINMENT_AND_ISOLATION", "EMERGENCY_HOST_ISOLATION"),
             "Advanced_Persistent_Threat": ("PLAYBOOK_APT_FORENSIC_CAPTURE_AND_CONTAINMENT", "IP_BLOCK"),
-            "APT_Lateral_Movement_C2": ("PLAYBOOK_APT_FORENSIC_CAPTURE_AND_CONTAINMENT", "IP_BLOCK"),
-            "Advanced_Persistent_Threat_Recon": ("PLAYBOOK_APT_FORENSIC_CAPTURE_AND_CONTAINMENT", "IP_BLOCK"),
             "Insider_Threat": ("PLAYBOOK_INSIDER_CREDENTIAL_REVOCATION_AND_AUDIT", "SESSION_REVOCATION"),
             "Insider_Data_Exfiltration": ("PLAYBOOK_INSIDER_CREDENTIAL_REVOCATION_AND_AUDIT", "SESSION_REVOCATION"),
-            "Malicious_C2_Beaconing": ("PLAYBOOK_C2_BEACON_BLOCK_AND_ISOLATE", "IP_BLOCK"),
             "Zero_Day_Exploitation": ("PLAYBOOK_EMERGENCY_PATCH_AND_NETWORK_SEGMENTATION", "NETWORK_SEGMENTATION"),
-            "Supply_Chain_Attack": ("PLAYBOOK_REGISTRY_QUARANTINE_AND_DEPENDENCY_AUDIT", "CONTAINER_QUARANTINE"),
             "DDoS": ("PLAYBOOK_DDOS_WAF_RATE_LIMITING_AND_BGP_SCRUBBING", "TRAFFIC_SCRUBBING"),
             "Phishing": ("PLAYBOOK_PHISHING_EMAIL_QUARANTINE_AND_PASSWORD_RESET", "MAILBOX_QUARANTINE"),
             "Bruteforce": ("PLAYBOOK_BRUTEFORCE_IP_RATE_LIMIT_AND_BLOCK", "IP_BLOCK"),
@@ -100,7 +161,7 @@ class DynamicDecisionEngine:
         score = ml_score
         is_dangerous = score >= self.HIGH_CRITICALITY_SCORE
 
-        logger.info(f"[DECISION ENGINE] Threat: {attack_type} | Risk Score: {score} | Playbook: {playbook} | Dangerous: {is_dangerous}")
+        logger.info(f"[DECISION ENGINE] Threat: {attack_type} | Risk Score: {score} | MISP Event: {misp_result.get('event_id')}")
 
         return {
             "attack_type": attack_type,

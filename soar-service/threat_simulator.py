@@ -55,21 +55,22 @@ class ThreatSimulator:
                 print(f"[WARN] Behavioral ML init failed: {e}")
 
     def generate_threat_payload(self):
+        # Har attack ke liye RANDOM IP generate kar raha hai
         attack_tactics = [
             {
                 "attack_type": "Insider_Data_Exfiltration",
-                "source_ip": "203.0.113.50",  # <--- YAHAN PUBLIC IP KAR DIYA HAI (Pehle 10.0.4.55 tha)
+                "source_ip": f"203.0.113.{random.randint(1, 254)}", 
                 "host": "HR-WORKSTATION-09",
                 "user": "j.smith",
                 "payload_details": "User j.smith accessed 500+ sensitive files at 2:00 AM and uploaded 2.5GB to external cloud storage.",
                 "failed_attempts": 1,
-                "misp_ioc_match": False,
+                "misp_ioc_match": True,
                 "volume": 500,
                 "is_off_hours": 1,
             },
             {
                 "attack_type": "DDoS",
-                "source_ip": "185.143.223.17",
+                "source_ip": f"185.143.{random.randint(1, 254)}.{random.randint(1, 254)}",
                 "host": "EDGE-LB-01",
                 "user": "external",
                 "payload_details": "High-volume volumetric DDoS flood targeting public-facing load balancer.",
@@ -80,7 +81,7 @@ class ThreatSimulator:
             },
             {
                 "attack_type": "Zero_Day_Exploitation",
-                "source_ip": "91.219.237.45",
+                "source_ip": f"91.219.{random.randint(1, 254)}.{random.randint(1, 254)}",
                 "host": "WEB-APP-01",
                 "user": "www-data",
                 "payload_details": "Unknown exploit targeting unpatched web service, shellcode injection observed.",
@@ -91,7 +92,7 @@ class ThreatSimulator:
             },
             {
                 "attack_type": "Ransomware_Execution_Attempt",
-                "source_ip": "103.27.202.88",
+                "source_ip": f"103.27.{random.randint(1, 254)}.{random.randint(1, 254)}",
                 "host": "FILE-SERVER-03",
                 "user": "backup_svc",
                 "payload_details": "Ransomware payload detected attempting mass file encryption.",

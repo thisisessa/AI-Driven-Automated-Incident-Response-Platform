@@ -22,8 +22,8 @@ default_args = {
 dag = DAG(
     'SOAR_Automated_Playbook_Workflow',
     default_args=default_args,
-    description='GAP 4 FIX: Orchestrates Threat Simulation → Decision → Case → Response',
-    schedule_interval=timedelta(seconds=60),  # Every 60s
+    description='Orchestrates Threat Simulation → Decision → Case → Response',
+    schedule_interval=timedelta(minutes=10),  # <--- HAR 10 MINUTE MEIN AUTO RUN HOGA
     catchup=False
 )
 
