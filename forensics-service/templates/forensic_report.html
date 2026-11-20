@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; }
+        h1 { color: #4ec9b0; border-bottom: 2px solid #4ec9b0; padding-bottom: 10px; }
+        h3 { color: #569cd6; }
+        .card { background: #252526; padding: 15px; margin-bottom: 15px; border-left: 4px solid #569cd6; border-radius: 4px; }
+        .hash { color: #ce9178; word-wrap: break-word; font-weight: bold; }
+        .alert { color: #f44747; font-weight: bold; }
+        .safe { color: #4ec9b0; font-weight: bold; }
+        ul { list-style-type: square; }
+        pre { background: #1e1e1e; padding: 10px; border: 1px solid #333; overflow-x: auto; color: #ce9178; }
+    </style>
+</head>
+<body>
+    <h1>🛡️ Digital Forensics & Incident Response (DFIR) Report</h1>
+    
+    <div class="card">
+        <h3>📁 Case Information</h3>
+        <p><b>Case ID:</b> {{ case_id }}</p>
+        <p><b>Target IP:</b> {{ target_ip }}</p>
+        <p><b>Evidence Integrity (SHA-256):</b> <br><span class="hash">{{ hash_val }}</span></p>
+    </div>
+
+    <div class="card">
+        <h3>🧠 Volatility Memory Analysis</h3>
+        <p class="alert">Malicious Processes Detected:</p>
+        <ul>
+        {% for proc in volatility.malfind %}
+            <li>{{ proc }}</li>
+        {% endfor %}
+        </ul>
+        
+        <p class="alert">Suspicious Network Connections:</p>
+        <ul>
+        {% for net in volatility.netscan %}
+            <li>{{ net }}</li>
+        {% endfor %}
+        </ul>
+    </div>
+
+    <div class="card">
+        <h3>🦠 YARA Signature Matches</h3>
+        {% if yara %}
+            <ul>
+            {% for match in yara %}
+                <li class="alert">{{ match.rule }} ({{ match.description }})</li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p class="safe">✅ No YARA matches found. System appears clean.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h3>🛡️ ClamAV Antivirus Scan</h3>
+        <p><b>Status:</b> 
+            <span class="{% if clamav.status == 'MALWARE_DETECTED' %}alert{% else %}safe{% endif %}">
+                {{ clamav.status }}
+            </span>
+        </p>
+        <pre>{{ clamav.raw_output }}</pre>
+    </div>
+
+    <div class="card" style="border-left-color: #4ec9b0;">
+        <p style="text-align: center; font-size: 12px; color: #888;">
+            Generated automatically by AI-Driven SOAR Platform.
+        </p>
+    </div>
+</body>
+</html>
