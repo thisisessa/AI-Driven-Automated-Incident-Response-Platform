@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; }
+        h1 { color: #4ec9b0; border-bottom: 2px solid #4ec9b0; padding-bottom: 10px; }
+        h3 { color: #569cd6; }
+        .card { background: #252526; padding: 15px; margin-bottom: 15px; border-left: 4px solid #569cd6; border-radius: 4px; }
+        .hash { color: #ce9178; word-wrap: break-word; font-weight: bold; }
+        .alert { color: #f44747; font-weight: bold; }
+        .safe { color: #4ec9b0; font-weight: bold; }
+        ul { list-style-type: square; }
+        pre { background: #1e1e1e; padding: 10px; border: 1px solid #333; overflow-x: auto; color: #ce9178; }
+    </style>
+</head>
+<body>
+    <h1>🛡️ Digital Forensics & Incident Response (DFIR) Report</h1>
+    
+    <div class="card">
+        <h3>📁 Case Information</h3>
+        <p><b>Case ID:</b> ~4190304</p>
+        <p><b>Target IP:</b> 91.219.111.205</p>
+        <p><b>Evidence Integrity (SHA-256):</b> <br><span class="hash">d69cefb5076e9d6ebc695d079c61f6a1de6df9a2e6a97d2137e1a8a9fdd8dda7</span></p>
+    </div>
+
+    <div class="card">
+        <h3>🧠 Volatility Memory Analysis</h3>
+        <p class="alert">Malicious Processes Detected:</p>
+        <ul>
+        
+            <li>PID 4912: powershell.exe (RWX Memory - Injected)</li>
+        
+            <li>PID 9921: svchost.exe (Suspicious DLL)</li>
+        
+        </ul>
+        
+        <p class="alert">Suspicious Network Connections:</p>
+        <ul>
+        
+            <li>ESTABLISHED 192.168.1.50:4444 -> 185.143.180.249:443 (C2 Beacon)</li>
+        
+        </ul>
+    </div>
+
+    <div class="card">
+        <h3>🦠 YARA Signature Matches</h3>
+        
+            <ul>
+            
+                <li class="alert">APT_Malware_Simulation (Detects Mimikatz and C2 beacons)</li>
+            
+            </ul>
+        
+    </div>
+
+    <div class="card">
+        <h3>🛡️ ClamAV Antivirus Scan</h3>
+        <p><b>Status:</b> 
+            <span class="safe">
+                CLEAN
+            </span>
+        </p>
+        <pre>No malware found.</pre>
+    </div>
+
+    <div class="card" style="border-left-color: #4ec9b0;">
+        <p style="text-align: center; font-size: 12px; color: #888;">
+            Generated automatically by AI-Driven SOAR Platform.
+        </p>
+    </div>
+</body>
+</html>
